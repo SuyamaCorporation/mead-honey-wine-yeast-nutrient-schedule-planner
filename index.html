@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ミード醸造・酵母栄養添加スケジュールプランナー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-amber-950 text-amber-100 min-h-screen">
+<div class="max-w-3xl mx-auto p-4">
+  <h1 class="text-2xl font-bold text-center text-amber-300 mb-1">🍯 ミード醸造プランナー</h1>
+  <p class="text-center text-amber-700 mb-5 text-sm">TOSNAプロトコル対応・酵母栄養(YAN)添加スケジュール自動生成</p>
+
+  <!-- Input Section -->
+  <div class="bg-amber-900/40 rounded-xl p-4 mb-4">
+    <h2 class="text-lg font-semibold text-amber-200 mb-3">醸造パラメータ</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">バッチ量 (L)</label>
+        <input type="number" id="volume" value="4" min="1" max="100" step="0.5" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+      </div>
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">蜂蜜量 (kg)</label>
+        <input type="number" id="honey" value="1.2" min="0.1" max="20" step="0.1" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+      </div>
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">目標OG (比重)</label>
+        <input type="number" id="og" value="1.100" min="1.040" max="1.180" step="0.005" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+      </div>
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">酵母種</label>
+        <select id="yeast" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="71b">71B（フルーティ）</option>
+          <option value="ec1118">EC-1118（強力・高ABV）</option>
+          <option value="k1v">K1-V1116（アロマ）</option>
+          <option value="d47">D47（低温向き）</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">醸造開始日</label>
+        <input type="date" id="start-date" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+      </div>
+      <div>
+        <label class="text-xs text-amber-400 block mb-1">栄養剤</label>
+        <select id="nutrient" class="w-full bg-amber-900 border border-amber-700 rounded-lg px-3 py-2 text-sm text-white">
+          <option value="ferm-o">Fermaid-O（有機）</option>
+          <option value="ferm-k">Fermaid-K（無機）</option>
+          <option value="dap">DAP単体</option>
+        </select>
+      </div>
+    </div>
+    <button onclick="generateSchedule()" class="mt-4 w-full bg-amber-600 hover:bg-amber-500 text-white py-2 rounded-lg font-semibold" aria-label="スケジュールを生成">スケジュール生成</button>
+  </div>
+
+  <!-- Schedule Output -->
+  <div id="schedule-output" class="hidden">
+    <div class="bg-amber-900/40 rounded-xl p-4 mb-4">
+      <h2 class="text-lg font-semibold text-amber-200 mb-3">📋 TOSNAスケジュール</h2>
+      <div id="yan-info" class="text-sm text-amber-300 mb-3"></div>
+      <div id="schedule-table" class="space-y-2"></div>
+    </div>
+
+    <!-- SG Progress Chart -->
+    <div class="bg-amber-900/40 rounded-xl p-4 mb-4">
+      <h2 class="text-lg font-semibold text-amber-200 mb-3">📈 比重推移グラフ</h2>
+      <canvas id="sg-chart" width="600" height="200" class="w-full rounded-lg"></canvas>
+    </div>
+
+    <!-- Notes -->
+    <div class="bg-amber-900/40 rounded-xl p-4">
+      <h2 class="text-sm font-semibold text-amber-200 mb-2">醸造メモ</h2>
+      <div id="brew-notes" class="text-xs text-amber-300 space-y-1"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const yeastYAN = { '71b':200, 'ec1118':250, 'k1v':200, 'd47':190 };
+const yeastABV = { '71b':14, 'ec1118':18, 'k1v':18, 'd47':14 };
+const nutrientRates = { 'ferm-o':{'label':'Fermaid-O','yanPer':40}, 'ferm-k':{'label':'Fermaid-K','yanPer':100}, 'dap':{'label':'DAP','yanPer':210} };
+
+document.getElementById('start-date').value = new Date().toISOString().split('T')[0];
+
+function generateSchedule() {
+  const vol = parseFloat(document.getElementById('volume').value);
+  const og = parseFloat(document.getElementById('og').value);
+  const yeast = document.getElementById('yeast').value;
+  const nutKey = document.getElementById('nutrient').value;
+  const startDate = new Date(document.getElementById('start-date').value);
+
+  const yanNeeded = yeastYAN[yeast] * vol;
+  const nut = nutrientRates[nutKey];
+  const totalNut = (yanNeeded / nut.yanPer * 1000).toFixed(1);
+  const perDose = (parseFloat(totalNut) / 4).toFixed(1);
+
+  // TOSNA: 4 additions at 24h, 48h, 72h, 1/3 sugar depletion
+  const og_points = (og - 1) * 1000;
+  const fg_target = 0.998 + (og - 1.098) * 0.03;
+  const sg_1_3 = og - (og - fg_target) / 3;
+
+  const schedule = [
+    { day: 0, event: '醸造開始・酵母ピッチング', action: `${nut.label} ${perDose}g 添加（第1回）`, sg: og },
+    { day: 1, event: '24時間後', action: `${nut.label} ${perDose}g 添加（第2回）`, sg: og - (og-fg_target)*0.1 },
+    { day: 2, event: '48時間後', action: `${nut.label} ${perDose}g 添加（第3回）`, sg: og - (og-fg_target)*0.2 },
+    { day: 4, event: '1/3糖消費時点', action: `${nut.label} ${perDose}g 添加（第4回・最終）`, sg: sg_1_3 },
+    { day: 14, event: '活発な発酵終了', action: 'ラッキング（澱引き）→セカンダリへ', sg: fg_target + 0.010 },
+    { day: 30, event: 'セカンダリ安定', action: '比重確認・清澄剤追加（任意）', sg: fg_target + 0.003 },
+    { day: 60, event: '長期熟成（任意）', action: 'ボトリング or さらに熟成', sg: fg_target },
+  ];
+
+  document.getElementById('yan-info').innerHTML = `
+    <span class="font-semibold">必要YAN総量:</span> ${yanNeeded.toFixed(0)} mg/L×L = ${(yanNeeded).toFixed(0)}mg &nbsp;|&nbsp;
+    <span class="font-semibold">${nut.label}総量:</span> ${totalNut}g &nbsp;|&nbsp;
+    <span class="font-semibold">1回あたり:</span> ${perDose}g × 4回 &nbsp;|&nbsp;
+    <span class="font-semibold">予測ABV:</span> ~${((og - fg_target) * 131.25).toFixed(1)}%
+  `;
+
+  const dateStr = (d) => {
+    const dt = new Date(startDate);
+    dt.setDate(dt.getDate() + d);
+    return `${dt.getMonth()+1}/${dt.getDate()}`;
+  };
+
+  const rows = schedule.map((s, i) => {
+    const isNutrient = s.action.includes('添加');
+    return `<div class="flex items-start gap-3 ${isNutrient ? 'bg-amber-800/50' : 'bg-amber-900/30'} rounded-lg px-3 py-2">
+      <div class="text-xs font-mono text-amber-400 w-14 flex-shrink-0 pt-0.5">Day ${s.day}<br>${dateStr(s.day)}</div>
+      <div class="flex-1">
+        <div class="text-sm font-semibold text-amber-200">${s.event}</div>
+        <div class="text-xs text-amber-300">${s.action}</div>
+      </div>
+      <div class="text-xs font-mono text-amber-400">SG ${s.sg.toFixed(3)}</div>
+    </div>`;
+  });
+
+  document.getElementById('schedule-table').innerHTML = rows.join('');
+
+  // Draw SG chart
+  const canvas = document.getElementById('sg-chart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle = '#3b1c00';
+  ctx.fillRect(0,0,W,H);
+
+  const pad = 40;
+  const sgMax = og + 0.005, sgMin = fg_target - 0.005;
+  const sgRange = sgMax - sgMin;
+
+  const toX = day => pad + (day / 65) * (W - pad*2);
+  const toY = sg => H - pad - ((sg - sgMin) / sgRange) * (H - pad*2);
+
+  // Grid
+  ctx.strokeStyle = '#5a3010'; ctx.lineWidth = 1;
+  for (let d=0;d<=65;d+=10) {
+    ctx.beginPath(); ctx.moveTo(toX(d), pad); ctx.lineTo(toX(d), H-pad); ctx.stroke();
+    ctx.fillStyle = '#a16032'; ctx.font = '10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('D'+d, toX(d), H-pad+14);
+  }
+
+  // Curve (smooth exponential decay)
+  ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let d=0;d<=65;d++) {
+    const sg = fg_target + (og - fg_target) * Math.exp(-d/12);
+    if (d===0) ctx.moveTo(toX(d), toY(sg)); else ctx.lineTo(toX(d), toY(sg));
+  }
+  ctx.stroke();
+
+  // Nutrient markers
+  [[0,'#ef4444'],[1,'#f97316'],[2,'#eab308'],[4,'#22c55e']].forEach(([d,c]) => {
+    const sg = fg_target + (og - fg_target) * Math.exp(-d/12);
+    ctx.fillStyle = c;
+    ctx.beginPath(); ctx.arc(toX(d), toY(sg), 5, 0, 2*Math.PI); ctx.fill();
+  });
+
+  // Axes labels
+  ctx.fillStyle = '#fbbf24'; ctx.font = '10px sans-serif'; ctx.textAlign='right';
+  [og, (og+fg_target)/2, fg_target].forEach(sg => {
+    ctx.fillText(sg.toFixed(3), pad-4, toY(sg)+3);
+  });
+  ctx.fillStyle = '#a16032'; ctx.textAlign='center'; ctx.font='11px sans-serif';
+  ctx.fillText('日数 (Day)', W/2, H-2);
+
+  document.getElementById('brew-notes').innerHTML = [
+    `• ${yeast.toUpperCase()} 酵母 — 推奨発酵温度: ${yeast==='d47'?'10〜15°C':'18〜22°C'}`,
+    `• フォームが激しい場合はDefoamer（消泡剤）またはKMeta少量を使用`,
+    `• 1/3糖消費の判定: OG ${og.toFixed(3)} → SG ${sg_1_3.toFixed(3)} になった時点`,
+    `• 酸素補給: Day 0〜3は1日2回マスト撹拌（嫌気的になる前に）`,
+  ].map(n => `<div>${n}</div>`).join('');
+
+  document.getElementById('schedule-output').classList.remove('hidden');
+}
+</script>
+</body>
+</html>
